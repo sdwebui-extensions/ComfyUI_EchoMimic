@@ -44,6 +44,7 @@ current_path = os.path.dirname(os.path.abspath(__file__))
 node_path_dir = os.path.dirname(current_path)
 comfy_file_path = os.path.dirname(node_path_dir)
 weigths_current_path = os.path.join(folder_paths.models_dir, "echo_mimic")
+cache_path = "/stable-diffusion-cache/models/echo_mimic"
 
 if not os.path.exists(weigths_current_path):
     os.makedirs(weigths_current_path)
@@ -67,7 +68,7 @@ def find_directories(base_path):
             directories.append(name)
     return directories
    
-pose_path_list = find_directories(tensorrt_lite)
+pose_path_list = find_directories(tensorrt_lite) + find_directories(os.path.join(cache_path, 'tensorrt_lite'))
 if pose_path_list:
     pose_path_list_=["none"]+pose_path_list
 else:
@@ -205,13 +206,15 @@ def process_video(uploaded_img, uploaded_audio, width, height, length, seed, fac
     return ouput_list
 
 
-def download_weights(file_dir,repo_id,subfolder="",pt_name=""):
+def download_weights(file_dir,repo_id,subfolder="",pt_name="", cache_dir=cache_path):
     if subfolder:
         file_path = os.path.join(file_dir,subfolder, pt_name)
         sub_dir=os.path.join(file_dir,subfolder)
         if not os.path.exists(sub_dir):
             os.makedirs(sub_dir)
         if not os.path.exists(file_path):
+            if os.path.exists(os.path.join(cache_dir, subfolder, pt_name)):
+                return get_instance_path(os.path.join(cache_dir, subfolder, pt_name))
             pt_path = hf_hub_download(
                 repo_id=repo_id,
                 subfolder=subfolder,
@@ -226,6 +229,8 @@ def download_weights(file_dir,repo_id,subfolder="",pt_name=""):
         if not os.path.exists(file_dir):
             os.makedirs(file_dir)
         if not os.path.exists(file_path):
+            if os.path.exists(os.path.join(cache_dir, pt_name)):
+                return get_instance_path(os.path.join(cache_dir, pt_name))
             pt_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=pt_name,
@@ -394,33 +399,41 @@ class Echo_LoadModel:
  
         ############# model_init started #############
         ## vae init
+        if os.path.exists('/stable-diffusion-cache/models/stable-diffusion-v1-5/vae'):
+            vae = '/stable-diffusion-cache/models/stable-diffusion-v1-5/vae'
+        else:
+            print(f"please download stabilityai/sd-vae-ft-mse to {os.path.join(folder_paths.models_dir, 'sd-vae-ft-mse')}")
+            vae = os.path.join(folder_paths.models_dir, 'sd-vae-ft-mse')
         vae = AutoencoderKL.from_pretrained(vae).to("cuda", dtype=weight_dtype)
         ## reference net init
         pretrained_base_model_path=get_instance_path(weigths_current_path)
         
         #pre models
-        download_weights(weigths_current_path,"lambdalabs/sd-image-variations-diffusers",subfolder="unet",pt_name="diffusion_pytorch_model.bin")
-        download_weights(weigths_current_path,"lambdalabs/sd-image-variations-diffusers",subfolder="unet",pt_name="config.json")
+        download_weights(weigths_current_path,"lambdalabs/sd-image-variations-diffusers",subfolder="unet",pt_name="diffusion_pytorch_model.bin", cache_dir=cache_path)
+        download_weights(weigths_current_path,"lambdalabs/sd-image-variations-diffusers",subfolder="unet",pt_name="config.json", cache_dir=cache_path)
         audio_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", subfolder="audio_processor",
-                                    pt_name="whisper_tiny.pt")
+                                    pt_name="whisper_tiny.pt", cache_dir=cache_path)
         
         if pose_mode=="normal":
-            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet_pose.pth")
-            motion_path = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="motion_module_pose.pth")
-            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet_pose.pth")
-            face_locator_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="face_locator_pose.pth")
+            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet_pose.pth", cache_dir=cache_path)
+            motion_path = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="motion_module_pose.pth", cache_dir=cache_path)
+            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet_pose.pth", cache_dir=cache_path)
+            face_locator_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="face_locator_pose.pth", cache_dir=cache_path)
         elif pose_mode=="turbo":
-            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet_pose.pth")
+            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet_pose.pth", cache_dir=cache_path)
             motion_path = download_weights(weigths_current_path, "BadToBest/EchoMimic",
-                                           pt_name="motion_module_pose_acc.pth")
-            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet_pose_acc.pth")
+                                           pt_name="motion_module_pose_acc.pth", cache_dir=cache_path)
+            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet_pose_acc.pth", cache_dir=cache_path)
             face_locator_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic",
-                                               pt_name="face_locator_pose.pth")
+                                               pt_name="face_locator_pose.pth", cache_dir=cache_path)
         else:
-            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet.pth")
-            motion_path = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="motion_module.pth")
-            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet.pth")
-            face_locator_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="face_locator.pth")
+            re_ckpt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="reference_unet.pth", cache_dir=cache_path)
+            motion_path = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="motion_module.pth", cache_dir=cache_path)
+            denois_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="denoising_unet.pth", cache_dir=cache_path)
+            face_locator_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", pt_name="face_locator.pth", cache_dir=cache_path)
+
+        if os.path.exists(os.path.join(cache_path, 'unet')):
+            pretrained_base_model_path = cache_path
         
        
         reference_unet = UNet2DConditionModel.from_config(

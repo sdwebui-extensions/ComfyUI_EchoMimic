@@ -6,12 +6,13 @@ import sys
 from pathlib import Path
 
 import av
+import cv2
 import numpy as np
 import torch
 import torchvision
 from einops import rearrange
 from PIL import Image
-
+from comfy.utils import common_upscale
 
 def seed_everything(seed):
     import random
@@ -84,7 +85,7 @@ def save_videos_from_pil(pil_images, path, fps=8, audio_path=None):
 
 
 
-def save_videos_grid(videos: torch.Tensor, path: str, audio_path=None, rescale=False, n_rows=6, fps=8,save_video=False):
+def save_videos_grid(videos: torch.Tensor, path: str, audio_path=None, rescale=False, n_rows=6, fps=8,save_video=False,size=None,ref_image_pil=None):
     videos = rearrange(videos, "b c t h w -> t b c h w")
     height, width = videos.shape[-2:]
     outputs = []
@@ -94,10 +95,39 @@ def save_videos_grid(videos: torch.Tensor, path: str, audio_path=None, rescale=F
         x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)  # (h w c)
         if rescale:
             x = (x + 1.0) / 2.0  # -1,1 -> 0,1
-        x = (x * 255).numpy().astype(np.uint8)
-        x = Image.fromarray(x)
+        z = (x * 255).numpy().astype(np.uint8) #方形
+        if size:
+            origin_w,origin_h=size
+            if origin_h>origin_w:#竖
+               z=center_crop(z,origin_w,origin_h) #竖图直接裁切
+            else: # 横 max是w
+                img = tensor2cv(ref_image_pil)
+                h, w = img.shape[:2]
+                if h>=w: #防止输入竖图或正方，想要横图的人才
+                    img_bg = np.zeros((origin_h,origin_w, 3), np.uint8)
+                    img_fg = cv2.resize(z, (origin_h, origin_h))  # 缩放到输出高度
+                    z = img_coty2_img(img_bg, img_fg)  # 回帖
+                else: #输入横图，输出也是横图，尝试回贴
+                    ratio=h/origin_h# 高固定
+                    new_w = int(w / ratio)
+                    img_input_new = cv2.resize(img, (new_w, origin_h))  # 原图缩放到输出高度
+                    
+                    if new_w>origin_w: #原图缩放后宽度超过输出尺寸
+                        img_bg=center_crop(img_input_new, origin_w, origin_h) # 中心裁切做背景
+                        img_fg = cv2.resize(z, (origin_h, origin_h))  # 缩放到输出高度
+                        z =img_coty2_img(img_bg,img_fg) #回帖
+                    else: #原图缩放后宽度小于等于输出尺寸
+                        
+                        img_bg = np.zeros((origin_h,origin_w, 3), np.uint8)
+                        img_fg = cv2.resize(img_input_new, (origin_h, origin_h))  # 缩放原图到输出高度
+                        img_bg = img_coty2_img(img_bg, img_fg)  # 获得带黑底的背景图
+    
+                        img_fg = cv2.resize(z, (origin_h, origin_h))  # 缩放实际图到输出高度
+                        z = img_coty2_img(img_bg, img_fg)  # 回帖
 
-        outputs.append(x)
+        z = Image.fromarray(z)
+
+        outputs.append(z)
     #os.makedirs(os.path.dirname(path), exist_ok=True)
     if save_video:
         save_videos_from_pil(outputs, path, fps, audio_path=audio_path)
@@ -105,6 +135,21 @@ def save_videos_grid(videos: torch.Tensor, path: str, audio_path=None, rescale=F
     return outputs
 
 
+def img_coty2_img(img_bg,img_fg):
+    h_fg, w_fg = img_fg.shape[:2]
+    h_bg, w_bg = img_bg.shape[:2]
+    # 计算居中位置
+    x = int((w_bg - w_fg) / 2)
+    y = int((h_bg - h_fg) / 2)
+    # 确保坐标不会是负数
+    x = max(0, x)
+    y = max(0, y)
+    # 确保不会超出大图像的边界
+    x = min(x, w_bg - w_fg)
+    y = min(y, h_bg - h_fg)
+    # 使用NumPy索引将小图像粘贴到大图像上
+    img_bg[y:y + h_fg, x:x + w_fg] = img_fg
+    return img_bg
 
 
 def read_frames(video_path):
@@ -166,4 +211,70 @@ def crop_and_pad(image, rect):
     # 裁剪图像
     cropped_image = image[new_y0:new_y1, new_x0:new_x1]
 
+    return cropped_image, (new_x0, new_y0, new_x1, new_y1)
+
+def crop_and_pad_rectangle(image,mask, rect,):
+    x0, y0, x1, y1 = rect #[89, 6, 334, 363]
+    h, w = image.shape[:2] #512，384
+
+    # 确保坐标在图像范围内
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+
+    # 裁剪图像
+    cropped_image = image[y0:y1, x0:x1]
+    cropped_mask = mask[y0:y1, x0:x1]
+   
+    return cropped_image, cropped_mask
+
+
+def crop_and_pad_rectangle_image(image, rect ):
+    x0, y0, x1, y1 = rect  # [89, 6, 334, 363]
+    h, w = image.shape[:2]  # 512，384
+    
+    # 确保坐标在图像范围内
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    
+    # 裁剪图像
+    cropped_image = image[y0:y1, x0:x1]
+    
     return cropped_image
+
+def tensor2cv(tensor_image):
+    if len(tensor_image.shape)==4:#bhwc to hwc
+        tensor_image=tensor_image.squeeze(0)
+    if tensor_image.is_cuda:
+        tensor_image = tensor_image.cpu().detach()
+    tensor_image=tensor_image.numpy()
+    #反归一化
+    maxValue=tensor_image.max()
+    tensor_image=tensor_image*255/maxValue
+    img_cv2=np.uint8(tensor_image)#32 to uint8
+    img_cv2=cv2.cvtColor(img_cv2,cv2.COLOR_RGB2BGR)
+    return img_cv2
+
+def cv2tensor(img):
+    assert type(img) == np.ndarray, 'the img type is {}, but ndarry expected'.format(type(img))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = torch.from_numpy(img.transpose((2, 0, 1)))
+    return img.float().div(255).unsqueeze(0)  # 255也可以改为256
+
+def tensor_upscale(img_tensor, width, height):
+    samples = img_tensor.movedim(-1, 1)
+    img = common_upscale(samples, width, height, "nearest-exact", "center")
+    samples = img.movedim(1, -1)
+    return samples
+
+def center_crop(image, crop_width, crop_height):
+    # 获取图像的中心坐标
+    height, width = image.shape[:2]
+    x = width // 2 - crop_width // 2
+    y = height // 2 - crop_height // 2
+    
+    x=max(0,x)
+    y=max(0,y)
+    
+    # 裁剪图像
+    crop_img = image[y:y + crop_height, x:x + crop_width]
+    return crop_img

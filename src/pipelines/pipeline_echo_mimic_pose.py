@@ -87,15 +87,15 @@ class AudioPose2VideoPipeline(DiffusionPipeline):
 
         device = torch.device(f"cuda:{gpu_id}")
 
-        for cpu_offloaded_model in [self.unet, self.text_encoder, self.vae]:
+        for cpu_offloaded_model in [self.reference_unet,self.denoising_unet, self.text_encoder,]:
             if cpu_offloaded_model is not None:
                 cpu_offload(cpu_offloaded_model, device)
 
     @property
     def _execution_device(self):
-        if self.device != torch.device("meta") or not hasattr(self.unet, "_hf_hook"):
+        if self.device != torch.device("meta") or not hasattr(self.reference_unet, "_hf_hook"):
             return self.device
-        for module in self.unet.modules():
+        for module in self.reference_unet.modules():
             if (
                 hasattr(module, "_hf_hook")
                 and hasattr(module._hf_hook, "execution_device")
@@ -535,12 +535,12 @@ class AudioPose2VideoPipeline(DiffusionPipeline):
                         .to(device)
                         .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
                     )
-
+                    
                     audio_latents_cond = torch.cat([audio_fea_final[:, c] for c in new_context]).to(device)
                     audio_latents = torch.cat([torch.zeros_like(audio_latents_cond), audio_latents_cond], 0)
                     pose_latents_cond = torch.cat([face_locator_tensor[:, :, c] for c in new_context]).to(device)
                     pose_latents = torch.cat([torch.zeros_like(pose_latents_cond), pose_latents_cond], 0)
-
+                    
                     latent_model_input = self.scheduler.scale_model_input(
                         latent_model_input, t
                     )

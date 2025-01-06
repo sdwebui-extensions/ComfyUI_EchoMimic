@@ -63,7 +63,7 @@ class Audio2VideoPipeline(DiffusionPipeline):
         text_encoder=None,
     ):
         super().__init__()
-
+        
         self.register_modules(
             vae=vae,
             reference_unet=reference_unet,
@@ -80,7 +80,7 @@ class Audio2VideoPipeline(DiffusionPipeline):
         self.ref_image_processor = VaeImageProcessor(
             vae_scale_factor=self.vae_scale_factor, do_convert_rgb=True
         )
-
+        
     def enable_vae_slicing(self):
         self.vae.enable_slicing()
 
@@ -95,15 +95,15 @@ class Audio2VideoPipeline(DiffusionPipeline):
 
         device = torch.device(f"cuda:{gpu_id}")
 
-        for cpu_offloaded_model in [self.unet, self.text_encoder, self.vae]:
+        for cpu_offloaded_model in [self.reference_unet,self.denoising_unet, self.text_encoder,]:
             if cpu_offloaded_model is not None:
                 cpu_offload(cpu_offloaded_model, device)
 
     @property
     def _execution_device(self):
-        if self.device != torch.device("meta") or not hasattr(self.unet, "_hf_hook"):
+        if self.device != torch.device("meta") or not hasattr(self.reference_unet, "_hf_hook"):
             return self.device
-        for module in self.unet.modules():
+        for module in self.reference_unet.modules():
             if (
                 hasattr(module, "_hf_hook")
                 and hasattr(module._hf_hook, "execution_device")
@@ -370,7 +370,6 @@ class Audio2VideoPipeline(DiffusionPipeline):
         device = self._execution_device
 
         do_classifier_free_guidance = guidance_scale > 1.0
-
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
@@ -391,9 +390,8 @@ class Audio2VideoPipeline(DiffusionPipeline):
             batch_size=batch_size,
             fusion_blocks="full",
         )
-
+        
         whisper_feature = self.audio_guider.audio2feat(audio_path)
-
         whisper_chunks = self.audio_guider.feature2chunks(feature_array=whisper_feature, fps=fps)
 
         print("whisper_chunks:", whisper_chunks.shape)
@@ -417,9 +415,9 @@ class Audio2VideoPipeline(DiffusionPipeline):
             generator
         )
         # print(video_length, latents.shape)
-        face_locator_tensor = self.face_locator(face_mask_tensor)
-        uc_face_locator_tensor = torch.zeros_like(face_locator_tensor)
-        face_locator_tensor = torch.cat([uc_face_locator_tensor, face_locator_tensor], dim=0)
+        c_face_locator_tensor = self.face_locator(face_mask_tensor)
+        uc_face_locator_tensor = torch.zeros_like(c_face_locator_tensor)
+        face_locator_tensor = torch.cat([uc_face_locator_tensor, c_face_locator_tensor], dim=0)
         # Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
@@ -474,7 +472,7 @@ class Audio2VideoPipeline(DiffusionPipeline):
                         encoder_hidden_states=None,
                         return_dict=False,
                     )
-                    reference_control_reader.update(reference_control_writer, do_classifier_free_guidance=True)
+                    reference_control_reader.update(reference_control_writer, do_classifier_free_guidance=do_classifier_free_guidance)
 
 
                 num_context_batches = math.ceil(len(context_queue) / context_batch_size)
@@ -498,8 +496,8 @@ class Audio2VideoPipeline(DiffusionPipeline):
                         .to(device)
                         .repeat(2 if do_classifier_free_guidance else 1, 1, 1, 1, 1)
                     )
-                    audio_latents = torch.cat([audio_fea_final[:, c] for c in new_context]).to(device)
-                    audio_latents = torch.cat([torch.zeros_like(audio_latents), audio_latents], 0)
+                    c_audio_latents = torch.cat([audio_fea_final[:, c] for c in new_context]).to(device)
+                    audio_latents = torch.cat([torch.zeros_like(c_audio_latents), c_audio_latents], 0)
 
                     latent_model_input = self.scheduler.scale_model_input(
                         latent_model_input, t
@@ -508,8 +506,8 @@ class Audio2VideoPipeline(DiffusionPipeline):
                         latent_model_input,
                         t,
                         encoder_hidden_states=None,
-                        audio_cond_fea=audio_latents,
-                        face_musk_fea=face_locator_tensor,
+                        audio_cond_fea=audio_latents if do_classifier_free_guidance else c_audio_latents,
+                        face_musk_fea=face_locator_tensor if do_classifier_free_guidance else c_face_locator_tensor,
                         return_dict=False,
                     )[0]
 

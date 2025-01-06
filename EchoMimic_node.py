@@ -144,7 +144,7 @@ class Echo_LoadModel:
         download_weights(weigths_current_path, "lambdalabs/sd-image-variations-diffusers", subfolder="unet",
                          pt_name="config.json")
         audio_pt = download_weights(weigths_current_path, "BadToBest/EchoMimic", subfolder="audio_processor",
-                                    pt_name="whisper_tiny.pt", cache_dir=cache_path)
+                                    pt_name="whisper_tiny.pt")
         
         # pre pth
         if version == "V1":
